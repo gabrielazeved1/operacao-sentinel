@@ -16,6 +16,7 @@ medir e explicar** o que cada componente viu. Os resultados estão na seção
 - [Conceitos de sistemas distribuídos aplicados](#conceitos-de-sistemas-distribuídos-aplicados)
 - [Arquitetura dos nós Rust](#arquitetura-dos-nós-rust)
 - [Observabilidade](#observabilidade)
+- [Engenharia do caos](#engenharia-do-caos)
 - [Experimentos](#experimentos)
 - [O que os dados revelaram](#o-que-os-dados-revelaram)
 - [Como rodar](#como-rodar)
@@ -179,6 +180,46 @@ Prometheus parado, o watchdog e o painel continuam funcionando.
 Toda regra foi escrita respondendo à pergunta "o que esta expressão retorna se a métrica sumir?".
 As regras têm **testes unitários** com `promtool` ([`prometheus/alerts.test.yml`](prometheus/alerts.test.yml)):
 um dos cenários prova que, com o watchdog parado, o `NoDown` desaparece e só o `MonitorParado` avisa.
+
+## Engenharia do caos
+
+Engenharia do caos é a prática de **injetar falhas de propósito, de forma controlada**, para
+descobrir como um sistema distribuído se comporta antes que a falha aconteça sozinha. A ideia
+ficou conhecida com o Chaos Monkey da Netflix, que desligava servidores em produção para garantir
+que o serviço sobrevivesse a isso. Em vez de esperar o incidente, a equipe provoca o incidente,
+mede o efeito e corrige o que não aguentou.
+
+A disciplina segue um método parecido com o científico, e este projeto o aplica assim:
+
+| Princípio | Como aparece aqui |
+|---|---|
+| **Definir o estado estável** | os SLIs (disponibilidade ≥ 99 %, p95 ≤ 0,5 s, erro ≤ 2 %) e uma linha de base medida antes de cada falha |
+| **Formular uma hipótese** | previsão escrita antes de injetar: "se [evento], então [efeito], porque [mecanismo]" |
+| **Simular eventos do mundo real** | processo parado, aplicação lenta, respostas 5xx, monitor fora do ar, atraso, perda e partição de rede, nó vivo mas não pronto |
+| **Minimizar o raio de impacto** | uma falha por vez; as falhas de rede só atingem contêineres do projeto e são desfeitas com um comando |
+| **Automatizar** | `scripts/experimento.sh` roda o ciclo completo: previsão, antes, injeção, durante, recuperação, depois |
+| **Rodar em produção** | não se aplica: é um laboratório local, com tráfego sintético de 3 req/s |
+
+**Como as falhas são injetadas.** Falhas de aplicação usam os endpoints `/admin` dos nós (atraso
+artificial, prontidão) e `docker compose stop`. Falhas de rede usam o `tc netem` do kernel Linux:
+o `scripts/chaos.sh` sobe um contêiner temporário com permissão `NET_ADMIN` dentro da rede do
+contêiner alvo e configura, na **saída** da interface dele:
+
+- uma fila `prio` com várias faixas, para separar o tráfego por destino;
+- um `netem` com atraso, variação (*jitter*) e/ou perda de pacotes;
+- filtros `u32` por IP de destino, quando se usa `--para`, para atingir só um caminho
+  (por exemplo, só o tráfego de `rust-a` para o `nginx`);
+- partição = 100 % de perda na saída do nó.
+
+Como a falha atua só na saída, atrasar o `rust-a` em 800 ms atrasa as **respostas** dele. Cada
+requisição tem duas travessias nesse sentido (a confirmação da conexão TCP e a resposta HTTP), por
+isso o usuário espera cerca de 1,6 s, e não 0,8 s.
+
+**Por que vale a pena.** Sem provocar as falhas, o sistema parecia correto: todos os alertas
+estavam configurados e testados. Foram os experimentos que mostraram que dois tipos de falha
+passavam sem nenhum alerta, que o Docker dizia `healthy` com o nó inalcançável e que o balanceador e
+o monitor discordavam sobre o mesmo nó. Os detalhes estão em
+[O que os dados revelaram](#o-que-os-dados-revelaram).
 
 ## Experimentos
 
