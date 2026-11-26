@@ -1,0 +1,76 @@
+rule_files:
+  - alerts.yml
+
+evaluation_interval: 5s
+
+tests:
+  - interval: 5s
+    input_series:
+      - series: 'watchdog_target_down{job="watchdog",instance="watchdog:9100",target="rust-a"}'
+        values: '1 1 1 1 stale'
+      - series: 'up{job="watchdog",instance="watchdog:9100"}'
+        values: '1 1 1 1 0 0 0 0 0 0 0 0 0'
+    alert_rule_test:
+      - eval_time: 15s
+        alertname: NoDown
+        exp_alerts:
+          - exp_labels: {severity: alta, dono: plantao, job: watchdog, instance: "watchdog:9100", target: rust-a}
+            exp_annotations:
+              summary: "Watchdog marcou rust-a como DOWN"
+              resposta: "Preserve evidencias (scripts/evidence.sh), teste a partir de outro ponto (nginx, toolbox) antes de reiniciar."
+      - eval_time: 60s
+        alertname: NoDown
+        exp_alerts: []
+      - eval_time: 30s
+        alertname: MonitorParado
+        exp_alerts: []
+      - eval_time: 60s
+        alertname: MonitorParado
+        exp_alerts:
+          - exp_labels: {severity: media, dono: equipe, job: watchdog, instance: "watchdog:9100"}
+            exp_annotations:
+              summary: "O Prometheus nao coleta o watchdog: ninguem esta avaliando os nos"
+              resposta: "Salvar logs (scripts/evidence.sh) e so entao reiniciar o watchdog. Enquanto isso, o NoDown NAO funciona."
+
+  - interval: 5s
+    input_series:
+      - series: 'sentinel_ready{job="rust",instance="rust-a:8080",node="rust-a"}'
+        values: '1 1 0 0 0 0 0 0 0 0 0 0 0'
+      - series: 'sentinel_http_requests_total{job="rust",instance="rust-a:8080",node="rust-a",route="root",code="200"}'
+        values: '0+15x12'
+    alert_rule_test:
+      - eval_time: 15s
+        alertname: NoNaoProntoRecebendoTrafego
+        exp_alerts: []
+      - eval_time: 40s
+        alertname: NoNaoProntoRecebendoTrafego
+        exp_alerts:
+          - exp_labels: {severity: media, dono: equipe, job: rust, instance: "rust-a:8080", node: rust-a}
+            exp_annotations:
+              summary: "rust-a diz que NAO esta pronto, mas continua recebendo trafego"
+              resposta: "Preservar evidencias e retirar o no do Nginx (admin.sh pool drenar <no>); investigar por que nao esta pronto (admin.sh status). Nao reiniciar antes."
+
+  - interval: 5s
+    input_series:
+      - series: 'sentinel_http_requests_total{job="rust",instance="rust-a:8080",node="rust-a",route="root",code="200"}'
+        values: '0+27x40'
+      - series: 'sentinel_http_requests_total{job="rust",instance="rust-a:8080",node="rust-a",route="erro",code="500"}'
+        values: '0+3x40'
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: TaxaErro5xxAlta
+        exp_alerts:
+          - exp_labels: {severity: alta, dono: plantao}
+            exp_annotations:
+              summary: "Mais de 2% das requisicoes de usuario terminaram em 5xx (2 min)"
+              resposta: "Ver quais rotas/nos (sli.sh; logs com status=5xx). Se for um no so, drenar (admin.sh pool drenar); se forem os dois, e bug comum: nao adianta trocar de no."
+  - interval: 5s
+    input_series:
+      - series: 'sentinel_http_requests_total{job="rust",instance="rust-a:8080",node="rust-a",route="root",code="200"}'
+        values: '0+0.09x40'
+      - series: 'sentinel_http_requests_total{job="rust",instance="rust-a:8080",node="rust-a",route="erro",code="500"}'
+        values: '0+0.01x40'
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: TaxaErro5xxAlta
+        exp_alerts: []

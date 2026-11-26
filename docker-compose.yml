@@ -1,0 +1,132 @@
+name: sentinel
+
+# ips fixos: o nginx resolve os nomes dos nos apenas na partida
+
+x-logging: &logging
+  driver: json-file
+  options: { max-size: "10m", max-file: "3" }
+
+services:
+  nginx:
+    image: nginx:1.27-alpine
+    command: ["nginx", "-c", "/etc/nginx/sentinel/nginx.conf", "-g", "daemon off;"]
+    ports: ["${HOST_PORT:-8080}:80"]
+    volumes: ["./nginx:/etc/nginx/sentinel:ro"]
+    depends_on:
+      rust-a: { condition: service_healthy }
+      rust-b: { condition: service_healthy }
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1/nginx-health"]
+      interval: 5s
+      timeout: 3s
+      retries: 3
+      start_period: 2s
+    logging: *logging
+    networks:
+      sentinel: { ipv4_address: "${NET_PREFIX:-10.9.8}.10" }
+
+  rust-a:
+    build: ./rust-a
+    image: sentinel-rust-a:local
+    environment: { NODE_NAME: rust-a, PORT: "8080", WARMUP_SECONDS: "3" }
+    logging: *logging
+    networks:
+      sentinel: { ipv4_address: "${NET_PREFIX:-10.9.8}.11" }
+
+  rust-b:
+    build: ./rust-b
+    image: sentinel-rust-b:local
+    environment: { NODE_NAME: rust-b, PORT: "8080", WARMUP_SECONDS: "3" }
+    logging: *logging
+    networks:
+      sentinel: { ipv4_address: "${NET_PREFIX:-10.9.8}.12" }
+
+  watchdog:
+    build: ./watchdog
+    image: sentinel-watchdog:local
+    environment:
+      ALVOS: "rust-a=http://rust-a:8080,rust-b=http://rust-b:8080"
+      INTERVALO: "5"
+      TIMEOUT: "2"
+      LIMITE_FALHAS: "3"
+      LIMITE_SUCESSOS: "2"
+    depends_on:
+      rust-a: { condition: service_healthy }
+      rust-b: { condition: service_healthy }
+    logging: *logging
+    networks:
+      sentinel: { ipv4_address: "${NET_PREFIX:-10.9.8}.20" }
+
+  prometheus:
+    image: prom/prometheus:v2.53.0
+    command:
+      - --config.file=/etc/prometheus/sentinel/prometheus.yml
+      - --storage.tsdb.retention.time=2h
+      - --web.enable-lifecycle
+    volumes: ["./prometheus:/etc/prometheus/sentinel:ro"]
+    ports: ["127.0.0.1:9090:9090"]
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:9090/-/healthy"]
+      interval: 5s
+      timeout: 3s
+      retries: 3
+    logging: *logging
+    networks:
+      sentinel: { ipv4_address: "${NET_PREFIX:-10.9.8}.30" }
+
+  painel:
+    build: ./painel
+    image: sentinel-painel:local
+    environment:
+      WATCHDOG_URL: "http://watchdog:9100"
+      NGINX_URL: "http://nginx/nginx-health"
+      PROMETHEUS_URL: "http://prometheus:9090/-/healthy"
+      NET_PREFIX: "${NET_PREFIX:-10.9.8}"
+      FRAMEWORKS: "rust-a=actix-web,rust-b=axum"
+    ports: ["127.0.0.1:${PAINEL_PORT:-8085}:8085"]
+    depends_on: [watchdog]
+    logging: *logging
+    networks:
+      sentinel: { ipv4_address: "${NET_PREFIX:-10.9.8}.50" }
+
+  toolbox:
+    build: ./toolbox
+    image: sentinel-toolbox:local
+    command: ["sleep", "infinity"]
+    init: true
+    volumes:
+      - ./toolbox/scripts:/opt/sentinel:ro
+      - ./evidencias:/evidencias
+    environment: { NET_PREFIX: "${NET_PREFIX:-10.9.8}" }
+    logging: *logging
+    networks:
+      sentinel: { ipv4_address: "${NET_PREFIX:-10.9.8}.40" }
+
+  trafego:
+    # sem build: o build paralelo da mesma imagem falha no docker desktop
+    image: sentinel-toolbox:local
+    pull_policy: never
+    profiles: ["trafego"]
+    command: ["/opt/sentinel/traffic.sh"]
+    init: true
+    volumes: ["./toolbox/scripts:/opt/sentinel:ro"]
+    environment:
+      TARGET: "http://nginx/"
+      RATE: "${TRAFEGO_RATE:-3}"
+      MAX_INFLIGHT: "20"
+    logging: *logging
+    networks:
+      sentinel: { ipv4_address: "${NET_PREFIX:-10.9.8}.41" }
+
+  chaos:
+    build: ./chaos
+    image: sentinel-chaos:local
+    profiles: ["tools"]
+    cap_add: ["NET_ADMIN"]
+
+networks:
+  sentinel:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: "${NET_PREFIX:-10.9.8}.0/24"

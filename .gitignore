@@ -1,0 +1,24 @@
+# instrucoes locais do claude code
+CLAUDE.md
+.claude/
+
+# configuracao local
+.env
+scripts/inc.sh
+
+# build
+rust-a/target/
+rust-b/target/
+__pycache__/
+*.pyc
+
+# saidas geradas pelos scripts (so a pasta vai para o repositorio)
+evidencias/*
+!evidencias/.gitkeep
+
+
+# sistema e editores
+.DS_Store
+.vscode/
+.idea/
+*.swp

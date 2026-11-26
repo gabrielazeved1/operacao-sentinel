@@ -1,0 +1,75 @@
+groups:
+  - name: sentinel
+    rules:
+      - alert: NoDown
+        expr: watchdog_target_down == 1
+        for: 15s
+        labels:
+          severity: alta
+          dono: plantao
+        annotations:
+          summary: "Watchdog marcou {{ $labels.target }} como DOWN"
+          resposta: "Preserve evidencias (scripts/evidence.sh), teste a partir de outro ponto (nginx, toolbox) antes de reiniciar."
+
+      - alert: TaxaErro5xxAlta
+        expr: |
+          (
+            sum(rate(sentinel_http_requests_total{route=~"root|erro",code=~"5.."}[2m]))
+              /
+            sum(rate(sentinel_http_requests_total{route=~"root|erro"}[2m]))
+          ) > 0.02
+          and
+          sum(rate(sentinel_http_requests_total{route=~"root|erro"}[2m])) > 0.1
+        for: 1m
+        labels:
+          severity: alta
+          dono: plantao
+        annotations:
+          summary: "Mais de 2% das requisicoes de usuario terminaram em 5xx (2 min)"
+          resposta: "Ver quais rotas/nos (sli.sh; logs com status=5xx). Se for um no so, drenar (admin.sh pool drenar); se forem os dois, e bug comum: nao adianta trocar de no."
+
+      - alert: LatenciaP95Alta
+        expr: |
+          histogram_quantile(0.95,
+            sum by (le, node) (rate(sentinel_app_request_duration_seconds_bucket[1m]))
+          ) > 1
+        for: 30s
+        labels:
+          severity: media
+          dono: plantao
+        annotations:
+          summary: "p95 de {{ $labels.node }} acima de 1 s (medido no no)"
+          resposta: "Conferir sentinel_artificial_delay_ms e sentinel_inflight_requests do no; comparar com req_time do Nginx (status.sh --usuario). Se so um no, drenar."
+
+      - alert: NoNaoProntoRecebendoTrafego
+        expr: |
+          (sentinel_ready == 0)
+            and on (node)
+          (sum by (node) (rate(sentinel_http_requests_total{route="root"}[1m])) > 0)
+        for: 15s
+        labels:
+          severity: media
+          dono: equipe
+        annotations:
+          summary: "{{ $labels.node }} diz que NAO esta pronto, mas continua recebendo trafego"
+          resposta: "Preservar evidencias e retirar o no do Nginx (admin.sh pool drenar <no>); investigar por que nao esta pronto (admin.sh status). Nao reiniciar antes."
+
+      - alert: MonitorParado
+        expr: up{job="watchdog"} == 0 or absent(up{job="watchdog"})
+        for: 15s
+        labels:
+          severity: media
+          dono: equipe
+        annotations:
+          summary: "O Prometheus nao coleta o watchdog: ninguem esta avaliando os nos"
+          resposta: "Salvar logs (scripts/evidence.sh) e so entao reiniciar o watchdog. Enquanto isso, o NoDown NAO funciona."
+
+      - alert: MonitorSemSondar
+        expr: time() - watchdog_last_probe_timestamp_seconds > 30
+        for: 10s
+        labels:
+          severity: media
+          dono: equipe
+        annotations:
+          summary: "Watchdog sem sondar {{ $labels.target }} ha mais de 30 s (dados velhos)"
+          resposta: "Conferir logs do watchdog; o estado mostrado pelo painel e pelo NoDown esta desatualizado."
