@@ -354,6 +354,11 @@ scripts/             setup, status, requests, admin, chaos, evidence, experiment
 evidencias/          saídas geradas pelos scripts (não versionadas)
 ```
 
+Cada contêiner tem a sua pasta, com o `Dockerfile` e o que roda dentro dele. A pasta `scripts/`
+reúne o que roda na sua máquina. Por isso o chaos aparece em dois lugares: `scripts/chaos.sh`
+roda no host, valida os argumentos e sobe o contêiner de falhas; `chaos/netem.sh` roda dentro
+desse contêiner e aplica o `tc netem` na rede do alvo.
+
 ## Limitações
 
 - **Uma máquina só:** um kernel, um relógio, um disco e um Docker para todos. Não há falhas
